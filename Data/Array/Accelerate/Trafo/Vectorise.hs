@@ -48,7 +48,7 @@ import Control.Applicative                              hiding ( Const, empty )
 -- friends
 -- import Data.Array.Accelerate.Analysis.Match            ( matchPreOpenExp )
 import Data.Array.Accelerate.Trafo.Shape
-import Data.Array.Accelerate.AST                       hiding ( Empty )
+import Data.Array.Accelerate.AST                       hiding ( Empty , liftPreOpenAcc)
 import Data.Array.Accelerate.Array.Lifted
 import Data.Array.Accelerate.Array.Representation      ( SliceIndex(..) )
 import Data.Array.Accelerate.Array.Sugar               hiding ( Segments )

@@ -10,6 +10,7 @@
 {-# LANGUAGE RankNTypes            #-}
 {-# LANGUAGE ScopedTypeVariables   #-}
 {-# LANGUAGE StandaloneDeriving    #-}
+{-# LANGUAGE TemplateHaskell       #-}
 {-# LANGUAGE TupleSections         #-}
 {-# LANGUAGE TypeFamilies          #-}
 {-# LANGUAGE TypeOperators         #-}
@@ -71,12 +72,14 @@ import Data.List                                                ( intercalate )
 import Data.Typeable
 import qualified Data.List                                      as List
 
+import Language.Haskell.TH                                      hiding ( Foreign )
 import GHC.Exts                                                 ( IsList )
 import qualified GHC.Exts                                       as GHC
 
 -- friends
 import Data.Array.Accelerate.Type
 import Data.Array.Accelerate.Array.Data
+import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Product
 import qualified Data.Array.Accelerate.Array.Representation     as Repr
 
@@ -646,6 +649,11 @@ class Typeable asm => Foreign asm where
   -- Backends should be able to produce a string representation of the foreign
   -- function for pretty printing, typically the name of the function.
   strForeign :: asm args -> String
+
+  -- Backends which want to support compile-time embedding must be able to lift
+  -- the foreign function into Template Haskell
+  liftForeign :: asm args -> Q (TExp (asm args))
+  liftForeign _ = $internalError "liftForeign" "not supported by this backend"
 
 
 -- Surface arrays
