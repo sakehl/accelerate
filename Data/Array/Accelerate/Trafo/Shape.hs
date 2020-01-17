@@ -333,6 +333,7 @@ independentShapeExp indA' aenv env expr =
     While p f x               -> indF1 x p &&& indF1 x f &&& indE x
     PrimConst _               -> ind
     PrimApp _ x               -> indE x
+    Undef                     -> ind
     -- We are indexing arrays. We will always stay shape independent. But maybe if the array is totally indepedent we can go to a totally dependent value
     Index a ix                -> (indA a &&& indE ix) ||| shInd
     LinearIndex a ix          -> (indA a &&& indE ix) ||| shInd
@@ -388,7 +389,7 @@ data ShapeType acc aenv a where
 instance Show (ShapeType acc aenv a) where
   show x = case x of
     ShapeVar env i -> case lookUp i env of
-      Nothing -> "ShapeVar " ++ show (idxToInt i)
+      Nothing -> "ShapeVar " ++ show (idxToInt i - sizeEnv env)
       Just st -> "ShapeVar -> (" ++ show st ++ ")"
     ShapeExpr _ _ -> "ShapeExpr"
     Scalar -> "Scalar"
@@ -413,6 +414,10 @@ data ShapeTypeTup acc aenv a where
 data ShapeEnv acc aenv shenv where
   SEEmpty :: ShapeEnv acc aenv aenv
   SEPush  :: ShapeEnv acc aenv shenv -> ShapeType acc aenv (s) -> ShapeEnv acc aenv (shenv, s)
+
+sizeEnv :: ShapeEnv acc aenv shenv -> Int
+sizeEnv SEEmpty = 0
+sizeEnv (SEPush env _) = sizeEnv env + 1 
 
 lookUp :: Idx shenv a -> ShapeEnv acc aenv shenv -> Maybe (ShapeType acc aenv (a))
 lookUp _ SEEmpty                     = Nothing
@@ -454,7 +459,7 @@ equalShape shA st1' st2' = do
       case (st1, st2) of
         (ShapeVar env1 idx1, ShapeVar env2 idx2) ->
           case (lookUp idx1 env1, lookUp idx2 env2) of
-            (Nothing, Nothing)   -> return $ idxToInt idx1 == idxToInt idx2
+            (Nothing, Nothing)   -> return $ idxToInt idx1 - sizeEnv env1 == idxToInt idx2 - sizeEnv env2
             (Just st1, Just st2) -> equalShape shA st1 st2
             (Just st1, Nothing)  -> equalShape shA st1 st2
             (Nothing, Just st2)  -> equalShape shA st1 st2
@@ -629,7 +634,9 @@ equalPreOpenExp shA shenv1 shenv2 e1 e2 =
     -- In the match library they reorder things, we don't here
     (PrimApp f1 x1, PrimApp f2 x2)   | Just Refl <- matchPrimFun' f1 f2
                                      -> eqE' x1 x2
+    (Undef, Undef)                   -> return True
     -- We cannot assume the same arrays, so we cannot know if indexing gives the same value
+    -- Although we could lookup the arrays, and check on complete equality
     (Index _ _, Index _ _)           ->  return False
     (LinearIndex _ _, LinearIndex _ _)
                                      -> return False
