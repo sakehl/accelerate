@@ -615,37 +615,40 @@ liftPreOpenAcc vectAcc indAcc shAcc ctx size acc
         isRegT :: forall t t' . LiftedTupleType t t' -> Bool
         isRegT NilLtup = True
         isRegT (SnocLtup lt l) =  isRegT lt && isReg' l
-    
-    asIrregTup :: forall a. (Arrays a) => LiftedAcc acc aenv' a -> LiftedAcc acc aenv' a
-    asIrregTup = asTup False
 
-    asIrregTup' :: forall a aenv. (Arrays a) => Size acc aenv  -> LiftedAcc acc aenv a -> LiftedAcc acc aenv a
-    asIrregTup' size = asTup' size False
+    removeAvoid :: forall a. (Arrays a) => LiftedAcc acc aenv' a -> LiftedAcc acc aenv' a
+    removeAvoid = removeStruc True
 
-    asTup :: forall a. (Arrays a) => Bool -> LiftedAcc acc aenv' a -> LiftedAcc acc aenv' a
-    asTup = asTup' size
+    removeRegular :: forall a. (Arrays a) => LiftedAcc acc aenv' a -> LiftedAcc acc aenv' a
+    removeRegular = removeStruc False
 
-    asTup' :: forall aenv a. (Arrays a) => Size acc aenv -> Bool -> LiftedAcc acc aenv a -> LiftedAcc acc aenv a
-    asTup' size sameShape a'@(LiftedAcc ty a) = 
+    removeRegular' :: forall a aenv. (Arrays a) => Size acc aenv  -> LiftedAcc acc aenv a -> LiftedAcc acc aenv a
+    removeRegular' size = removeStruc' size False
+
+    removeStruc :: forall a. (Arrays a) => Bool -> LiftedAcc acc aenv' a -> LiftedAcc acc aenv' a
+    removeStruc = removeStruc' size
+
+    removeStruc' :: forall aenv a. (Arrays a) => Size acc aenv -> Bool -> LiftedAcc acc aenv a -> LiftedAcc acc aenv a
+    removeStruc' size onlyAvoid a'@(LiftedAcc ty a) = 
       case ty of
         UnitT       -> LiftedAcc LiftedUnitT size
         LiftedUnitT -> a'
-        AvoidedT    | sameShape || checkScalar ty -> LiftedAcc RegularT $ replicateA size a
+        AvoidedT    | onlyAvoid || checkScalar ty -> LiftedAcc RegularT $ replicateA size a
                     | otherwise -> LiftedAcc IrregularT . sparsifyC . replicateA size $ a
-        RegularT    | sameShape || checkScalar ty -> a'
+        RegularT    | onlyAvoid || checkScalar ty -> a'
                     | otherwise -> LiftedAcc IrregularT $ sparsifyC a
         IrregularT  -> a'
-        TupleT tup  | LiftedAtuple ty at <- asTupT tup (asAtupleC a)
+        TupleT tup  | LiftedAtuple ty at <- removeStrucT tup (asAtupleC a)
                     -> LiftedAcc (freeProdT ty) $^ Atuple at
       where
-        asTupT :: forall t t' . 
+        removeStrucT :: forall t t' . 
                            LiftedTupleType t t'
                         -> Atuple (acc aenv) t'
                         -> LiftedAtuple acc aenv t
-        asTupT NilLtup NilAtup = LiftedAtuple NilLtup NilAtup
-        asTupT (SnocLtup lt l) (SnocAtup tt ta)
-          | LiftedAcc ty a <- asTup' size sameShape (LiftedAcc l ta)
-          , LiftedAtuple tup t <- asTupT lt tt
+        removeStrucT NilLtup NilAtup = LiftedAtuple NilLtup NilAtup
+        removeStrucT (SnocLtup lt l) (SnocAtup tt ta)
+          | LiftedAcc ty a <- removeStruc' size onlyAvoid (LiftedAcc l ta)
+          , LiftedAtuple tup t <- removeStrucT lt tt
           = LiftedAtuple (SnocLtup tup ty) (SnocAtup t a)
 
     liftedE :: forall t. Elt t => LiftedExp acc () aenv' aenv' t -> acc aenv' (Vector t)
@@ -968,24 +971,22 @@ liftPreOpenAcc vectAcc indAcc shAcc ctx size acc
                              (inject $ Aprj (SuccTupIdx $ ZeroTupIdx) avar0)
             in if independent
               then
-                let newctx  = push ctx ty
-                    newsize = weakenA1 size
-                    predb_l = asRegular' newsize . vectAcc newctx newsize $ predb
-                in case vectAcc newctx (weakenA1 size) iterb of
+                case removeAvoid (LiftedAcc ty a) of
                   -- The iteration function retains the shape. So we can simply use the independent awhile version
-                    LiftedAcc iterty iterb_l | Just same <- isSame iterty ty
-                                             -> LiftedAcc ty $ awhileIndependent predb_l (castAccC same iterb_l) a
+                  LiftedAcc newty newa | newctx  <- push ctx newty
+                                       , LiftedAcc iterty iterb_l <- vectAcc newctx (weakenA1 size) iterb
+                                       , Just same <- isSame iterty newty
+                                       -> let newsize = weakenA1 size
+                                              predb_l = asRegular' newsize . vectAcc newctx newsize $ predb
+                                          in LiftedAcc newty $ awhileIndependent predb_l (castAccC same iterb_l) newa
                   -- It is still indepedent. But the iteration function changed the types (probably from regular to irregular)
                   -- So we need the functions to deal with irregular input
-                  -- TODO: Clean up this mess of a code....
-                    _                        | LiftedAcc resty resa <-  asIrregTup $ LiftedAcc ty a
-                                             , LiftedAcc iterty' iterb_l' <- vectAcc (push ctx resty) (weakenA1 size) iterb
-                                             , Just same <- isSame iterty' resty
-                                             -> let predb_l' = asRegular' (weakenA1 size) . vectAcc (push ctx resty) (weakenA1 size) $ predb
-                                                in LiftedAcc resty $ awhileIndependent predb_l' (castAccC same iterb_l') resa
-                    _                        -> error "Absurd in awhileL"
-                  -- The iterations function doesn't retain the same shape. Thus we should switch to an irregular representation.
-                  -- It must stay irregular after that.
+                  _                    | LiftedAcc resty resa <-  removeRegular $ LiftedAcc ty a
+                                       , LiftedAcc iterty' iterb_l' <- vectAcc (push ctx resty) (weakenA1 size) iterb
+                                       , Just same <- isSame iterty' resty
+                                       -> let predb_l' = asRegular' (weakenA1 size) . vectAcc (push ctx resty) (weakenA1 size) $ predb
+                                          in LiftedAcc resty $ awhileIndependent predb_l' (castAccC same iterb_l') resa
+                  _                    -> error "Absurd in awhileL"
               else 
                 case ty of
                 --Uninteresting
@@ -1019,10 +1020,10 @@ liftPreOpenAcc vectAcc indAcc shAcc ctx size acc
                 -- It remains the same shape, so it doesn't have to transforms its regular types
                 -- Although it must transforms its avoided types and the join might transform its types aswell
                 TupleT _ | sameShape
-                           , LiftedAcc resty resa <-  asTup sameShape $ LiftedAcc ty a
-                           , LiftedAcc itty iter <- vectAcc (push ctx resty) (weakenA1 size) $ iterb
-                           , Just same <- isSame itty resty
-                           ->
+                         , LiftedAcc resty resa <-  removeStruc sameShape $ LiftedAcc ty a
+                         , LiftedAcc itty iter <- vectAcc (push ctx resty) (weakenA1 size) $ iterb
+                         , Just same <- isSame itty resty
+                         ->
                   let newctx  = push ctx resty
                       newsize = weakenA1 size
                       predb_l = asRegular' newsize . vectAcc newctx newsize $ predb
@@ -1031,12 +1032,12 @@ liftPreOpenAcc vectAcc indAcc shAcc ctx size acc
                 -- It doesn't have the same shapes, so it must convert the regular and avoided types to an irregular representation (except for Scalar regular arrays)
                 -- Or maybe the iteration function didn't stay regular, thus that needed to switch aswell.
                 -- But in the latter case, we can still posibly do an optimized awhile
-                TupleT _ | LiftedAcc resty resa <-  asIrregTup $ LiftedAcc ty a
+                TupleT _ | LiftedAcc resty resa <-  removeRegular $ LiftedAcc ty a
                            ->
                   let newctx  = push ctx resty
                       newsize = weakenA1 size
                       predb_l = asRegular' newsize . vectAcc newctx newsize $ predb
-                      iterb_l = asSame resty . asIrregTup' newsize . vectAcc newctx newsize $ iterb
+                      iterb_l = asSame resty . removeRegular' newsize . vectAcc newctx newsize $ iterb
                   in trace "IRREGULAR" "awhile" . LiftedAcc resty $ awhileLift sameShape resty predb_l iterb_l resa
                 _ -> error "Absurd: Vectorisation of loops should never end up here"
     awhileL _ _ _= error "Absurd: Vectorisation of loops should never end up here"
